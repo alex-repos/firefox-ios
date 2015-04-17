@@ -5,6 +5,7 @@
 import Foundation
 import Shared
 import Storage
+import UIKit
 import XCGLogger
 
 // TODO: same comment as for SyncAuthState.swift!
@@ -52,6 +53,70 @@ public class FatalError: SyncError {
     }
 }
 
+// TODO
+public protocol Command {
+    init?(command: String, args: [JSON])
+    func run() -> Success
+}
+
+// Shit.
+// We need a way to wipe or reset engines.
+// We need a way to log out the account.
+// So when we sync commands, we're gonna need a delegate of some kind.
+public class WipeCommand: Command {
+    public required init?(command: String, args: [JSON]) {
+        return nil
+    }
+
+    public func run() -> Success {
+        return succeed()
+    }
+}
+
+public class DisplayURICommand: Command {
+    let uri: NSURL
+    // clientID: we don't care.
+    let title: String
+
+    public required init?(command: String, args: [JSON]) {
+        if let uri = args[0].asString?.asURL,
+               title = args[2].asString {
+            self.uri = uri
+            self.title = title
+        } else {
+            // Oh, Swift.
+            self.uri = "http://localhost/".asURL!
+            self.title = ""
+            return nil
+        }
+    }
+
+    public func run() -> Success {
+        // TODO: localize.
+        let app = UIApplication.sharedApplication()
+        let notification = UILocalNotification()
+        notification.alertTitle = "New tab: \(title)"
+        notification.alertBody = uri.absoluteString!
+        notification.alertAction = nil
+
+        // TODO: put the URL into the alert userInfo.
+        // TODO: application:didFinishLaunchingWithOptions:
+        // TODO:
+        // TODO: set additionalActions to bookmark or add to reading list.
+        app.presentLocalNotificationNow(notification)
+        return succeed()
+    }
+}
+
+let Commands = [
+    "wipeAll": WipeCommand.self,
+    "wipeEngine": WipeCommand.self,
+    // resetEngine
+    // resetAll
+    // logout
+    "displayURI": DisplayURICommand.self,
+]
+
 public protocol SingleCollectionSynchronizer {
     func remoteHasChanges(info: InfoCollections) -> Bool
 }
@@ -96,40 +161,79 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         return RemoteClient(json: payload, modified: modified)
     }
 
-    public func synchronizeLocalClients(localClients: RemoteClientsAndTabs, withServer storageClient: Sync15StorageClient, info: InfoCollections) -> Deferred<Result<()>> {
-
-        func onResponseReceived(response: StorageResponse<[Record<ClientPayload>]>) -> Success {
-            func afterWipe() -> Success {
-                // TODO: process incoming records: both others and our own.
-                // TODO: decide whether to upload ours.
-                let ourGUID = self.scratchpad.clientGUID
-
-                let records = response.value
-                let responseTimestamp = response.metadata.lastModifiedMilliseconds
-
-                func updateMetadata() -> Success {
-                    self.lastFetched = responseTimestamp!
-                    return succeed()
-                }
-
-                log.debug("Got \(records.count) client records.")
-
-                let toInsert = records.filter({ $0.id != ourGUID }).map(self.clientRecordToLocalClientEntry)
-
-                return localClients.insertOrUpdateClients(toInsert)
-                  >>== updateMetadata
-            }
-
-            // If this is a fresh start, do a wipe.
-            // N.B., we don't wipe outgoing commands! (TODO: check this when we implement commands!)
-            // N.B., but perhaps we should discard outgoing wipe/reset commands!
-            if self.lastFetched == 0 {
-                return localClients.wipeClients()
-                  >>== afterWipe
-            }
-
-            return afterWipe()
+    // If this is a fresh start, do a wipe.
+    // N.B., we don't wipe outgoing commands! (TODO: check this when we implement commands!)
+    // N.B., but perhaps we should discard outgoing wipe/reset commands!
+    private func wipeIfNecessary(localClients: RemoteClientsAndTabs) -> Success {
+        if self.lastFetched == 0 {
+            return localClients.wipeClients()
         }
+        return succeed()
+    }
+
+    private func processCommands(commands: [JSON]) -> Success {
+        if commands.isEmpty {
+            return succeed()
+        }
+
+        func parse(json: JSON) -> Command? {
+            if let name = json["command"].asString,
+                   args = json["args"].asArray,
+                   constructor = Commands[name] {
+                return constructor(command: name, args: args)
+            }
+            return nil
+        }
+
+        let commands = optFilter(commands.map(parse))
+
+        // TODO: run commands.
+        commands
+        return succeed()
+    }
+
+    private func processCommandsFromRecord(record: Record<ClientPayload>?, withServer storageClient: Sync15StorageClient) -> Success {
+        // TODO: process commands.
+        // TODO: upload a replacement record if we need to override commands.
+        // TODO: short-circuit based on the modified time of the record we uploaded, so we don't need to skip ahead.
+        if let record = record {
+            return processCommands(record.payload.commands)
+        }
+        return succeed()
+    }
+
+    private func applyStorageResponse(response: StorageResponse<[Record<ClientPayload>]>, toLocalClients localClients: RemoteClientsAndTabs, withServer storageClient: Sync15StorageClient) -> Success {
+        // TODO: decide whether to upload ours.
+
+        let records = response.value
+        let responseTimestamp = response.metadata.lastModifiedMilliseconds
+
+        func updateMetadata() -> Success {
+            self.lastFetched = responseTimestamp!
+            return succeed()
+        }
+
+        log.debug("Got \(records.count) client records.")
+
+        let ourGUID = self.scratchpad.clientGUID
+        var toInsert = [RemoteClient]()
+        var ours: Record<ClientPayload>? = nil
+
+        for (rec) in records {
+            if rec.id == ourGUID {
+                ours = rec
+            } else {
+                toInsert.append(self.clientRecordToLocalClientEntry(rec))
+            }
+        }
+
+        return localClients.insertOrUpdateClients(toInsert)
+          >>== { self.processCommandsFromRecord(ours, withServer: storageClient) }
+          >>== updateMetadata
+    }
+
+    // TODO: return whether or not the sync should continue.
+    public func synchronizeLocalClients(localClients: RemoteClientsAndTabs, withServer storageClient: Sync15StorageClient, info: InfoCollections) -> Success {
 
         if !self.remoteHasChanges(info) {
             // Nothing to do.
@@ -139,14 +243,20 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
             return succeed()
         }
 
-        if let factory: (String) -> ClientPayload? = self.scratchpad.keys?.value.factory(self.collection, f: { ClientPayload($0) }) {
-            let clientsClient = storageClient.clientForCollection(self.collection, factory: factory)
-            return clientsClient.getSince(self.lastFetched)
-              >>== onResponseReceived
+        let factory: ((String) -> ClientPayload?)? = self.scratchpad.keys?.value.factory(self.collection, f: { ClientPayload($0) })
+        if factory == nil {
+            log.error("Couldn't make clients factory.")
+            return deferResult(FatalError(message: "Couldn't make clients factory."))
         }
 
-        log.error("Couldn't make clients factory.")
-        return deferResult(FatalError(message: "Couldn't make clients factory."))
+        let clientsClient = storageClient.clientForCollection(self.collection, factory: factory!)
+        return clientsClient.getSince(self.lastFetched)
+          >>== { response in
+            return self.wipeIfNecessary(localClients)
+               >>> {
+                self.applyStorageResponse(response, toLocalClients: localClients, withServer: storageClient)
+            }
+        }
     }
 }
 
