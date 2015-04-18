@@ -205,7 +205,8 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
      * upload a replacement record.
      */
     private func processCommandsFromRecord(record: Record<ClientPayload>?, withServer storageClient: Sync15CollectionClient<ClientPayload>) -> Deferred<Result<(Bool, [Command])>> {
-        // TODO: process commands.
+        log.debug("Processing commands from downloaded record.")
+
         // TODO: short-circuit based on the modified time of the record we uploaded, so we don't need to skip ahead.
         if let record = record {
             let commands = record.payload.commands
@@ -227,21 +228,36 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         return deferResult((false, []))
     }
 
+    /**
+     * Upload our record if either (a) we know we should upload, or (b)
+     * our own notes tell us we're due to reupload.
+     */
     private func maybeUploadOurRecord(should: Bool, ifUnmodifiedSince: Timestamp?, toServer storageClient: Sync15CollectionClient<ClientPayload>) -> Success {
-        if let ifUnmodifiedSince = ifUnmodifiedSince where should {
-            return storageClient.put(getOurClientRecord(), ifUnmodifiedSince: ifUnmodifiedSince)
-               >>> { succeed() }
+
+        let lastUpload = self.scratchpad.clientRecordLastUpload
+        let expired = lastUpload < (NSDate.now() - OneWeekInMilliseconds)
+        log.debug("Should we upload our client record? Caller = \(should), expired = \(expired).")
+        if !should && !expired {
+            return succeed()
         }
-        return succeed()
+
+        let iUS: Timestamp? = ifUnmodifiedSince ?? ((lastUpload == 0) ? nil : lastUpload)
+
+        return storageClient.put(getOurClientRecord(), ifUnmodifiedSince: iUS)
+           >>> {
+            log.debug("Upload succeeded.")
+            return succeed()
+        }
     }
 
     private func applyStorageResponse(response: StorageResponse<[Record<ClientPayload>]>, toLocalClients localClients: RemoteClientsAndTabs, withServer storageClient: Sync15CollectionClient<ClientPayload>) -> Success {
-        // TODO: decide whether to upload ours.
+        log.debug("Applying clients response.")
 
         let records = response.value
         let responseTimestamp = response.metadata.lastModifiedMilliseconds
 
         func updateMetadata() -> Success {
+            // TODO: track our upload and skip it!
             self.lastFetched = responseTimestamp!
             return succeed()
         }
@@ -254,6 +270,7 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
 
         for (rec) in records {
             if rec.id == ourGUID {
+                log.debug("Saw our own record in response.")
                 ours = rec
             } else {
                 toInsert.append(self.clientRecordToLocalClientEntry(rec))
@@ -266,9 +283,9 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         return localClients.insertOrUpdateClients(toInsert)
           >>== { self.processCommandsFromRecord(ours, withServer: storageClient) }
           >>== { (shouldUpload, commands) in
-
             return self.maybeUploadOurRecord(shouldUpload, ifUnmodifiedSince: ours?.modified, toServer: storageClient)
                >>> {
+                log.debug("Running \(commands.count) commands.")
                 for (command) in commands {
                     command.run(self)
                 }
@@ -279,14 +296,7 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
 
     // TODO: return whether or not the sync should continue.
     public func synchronizeLocalClients(localClients: RemoteClientsAndTabs, withServer storageClient: Sync15StorageClient, info: InfoCollections) -> Success {
-
-        if !self.remoteHasChanges(info) {
-            // Nothing to do.
-            // TODO: upload local client if necessary.
-            // TODO: move client upload timestamp out of Scratchpad.
-            log.debug("No remote changes for clients. (Last fetched \(self.lastFetched).)")
-            return succeed()
-        }
+        log.debug("Synchronizing clients.")
 
         let factory: ((String) -> ClientPayload?)? = self.scratchpad.keys?.value.factory(self.collection, f: { ClientPayload($0) })
         if factory == nil {
@@ -295,12 +305,19 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         }
 
         let clientsClient = storageClient.clientForCollection(self.collection, factory: factory!)
+
+        if !self.remoteHasChanges(info) {
+            // Nothing to do.
+            // TODO: upload local client if necessary.
+            // TODO: move client upload timestamp out of Scratchpad.
+            log.debug("No remote changes for clients. (Last fetched \(self.lastFetched).)")
+            return maybeUploadOurRecord(false, ifUnmodifiedSince: nil, toServer: clientsClient)
+        }
+
         return clientsClient.getSince(self.lastFetched)
           >>== { response in
             return self.wipeIfNecessary(localClients)
-               >>> {
-                self.applyStorageResponse(response, toLocalClients: localClients, withServer: clientsClient)
-            }
+               >>> { self.applyStorageResponse(response, toLocalClients: localClients, withServer: clientsClient) }
         }
     }
 }
