@@ -91,13 +91,20 @@ protocol Profile {
 
 public class BrowserProfile: Profile {
     private let name: String
+    weak private var app: UIApplication?
 
-    init(localName: String) {
+    init(localName: String, app: UIApplication?) {
         self.name = localName
+        self.app = app
 
         let notificationCenter = NSNotificationCenter.defaultCenter()
         let mainQueue = NSOperationQueue.mainQueue()
         notificationCenter.addObserver(self, selector: Selector("onLocationChange:"), name: "LocationChange", object: nil)
+    }
+
+    // Extensions don't have a UIApplication.
+    convenience init(localName: String) {
+        self.init(localName: localName, app: nil)
     }
 
     @objc
