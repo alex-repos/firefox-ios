@@ -8,6 +8,10 @@ import ReadingList
 import Shared
 import Storage
 import Sync
+import XCGLogger
+
+// TODO: same comment as for SyncAuthState.swift!
+private let log = XCGLogger.defaultInstance()
 
 public class NoAccountError: SyncError {
     public var description: String {
@@ -168,6 +172,7 @@ public class BrowserProfile: Profile {
     }()
 
     private class func syncClientsToStorage(storage: RemoteClientsAndTabs, delegate: SyncDelegate, prefs: Prefs, ready: Ready) -> Deferred<Result<Ready>> {
+        log.debug("Syncing clients to storage.")
         let clientSynchronizer = ready.synchronizer(ClientsSynchronizer.self, delegate: delegate, prefs: prefs)
         let success = clientSynchronizer.synchronizeLocalClients(storage, withServer: ready.client, info: ready.info)
         return success >>== always(ready)
@@ -202,7 +207,10 @@ public class BrowserProfile: Profile {
     }
 
     public func getClientsAndTabs() -> Deferred<Result<[ClientAndTabs]>> {
+        log.info("Account is \(self.account), app is \(self.app)")
         if let account = self.account, app = self.app {
+            log.debug("Fetching clients and tabs.")
+
             // TODO: get from the account itself.
             let url = ProductionSync15Configuration().tokenServerEndpointURL
             let authState = account.syncAuthState(url)
