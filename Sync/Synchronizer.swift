@@ -47,7 +47,7 @@ public protocol SyncDelegate {
  * pickle instructions for eventual delivery next time one is made and synchronized…
  */
 public protocol Synchronizer {
-    init(scratchpad: Scratchpad, basePrefs: Prefs)
+    init(scratchpad: Scratchpad, delegate: SyncDelegate, basePrefs: Prefs)
     //func synchronize(client: Sync15StorageClient, info: InfoCollections) -> Deferred<Result<Scratchpad>>
 }
 
@@ -132,12 +132,15 @@ public protocol SingleCollectionSynchronizer {
 
 public class BaseSingleCollectionSynchronizer: SingleCollectionSynchronizer {
     let collection: String
+
     private let scratchpad: Scratchpad
+    private let delegate: SyncDelegate
     private let prefs: Prefs
 
-    init(scratchpad: Scratchpad, basePrefs: Prefs, collection: String) {
-        self.collection = collection
+    init(scratchpad: Scratchpad, delegate: SyncDelegate, basePrefs: Prefs, collection: String) {
         self.scratchpad = scratchpad
+        self.delegate = delegate
+        self.collection = collection
         let branchName = "synchronizer." + collection + "."
         self.prefs = basePrefs.branch(branchName)
 
@@ -160,8 +163,9 @@ public class BaseSingleCollectionSynchronizer: SingleCollectionSynchronizer {
 }
 
 public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer {
-    public required init(scratchpad: Scratchpad, basePrefs: Prefs) {
-        super.init(scratchpad: scratchpad, basePrefs: basePrefs, collection: "clients")
+    public required init(scratchpad: Scratchpad, delegate: SyncDelegate, basePrefs: Prefs) {
+        super.init(scratchpad: scratchpad, delegate: delegate, basePrefs: basePrefs, collection: "clients")
+    }
     }
 
     private func clientRecordToLocalClientEntry(record: Record<ClientPayload>) -> RemoteClient {
@@ -263,15 +267,15 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
           >>== { response in
             return self.wipeIfNecessary(localClients)
                >>> {
-                self.applyStorageResponse(response, toLocalClients: localClients, withServer: storageClient)
+                self.applyStorageResponse(response, toLocalClients: localClients, withServer: clientsClient)
             }
         }
     }
 }
 
 public class TabsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer {
-    public required init(scratchpad: Scratchpad, basePrefs: Prefs) {
-        super.init(scratchpad: scratchpad, basePrefs: basePrefs, collection: "tabs")
+    public required init(scratchpad: Scratchpad, delegate: SyncDelegate, basePrefs: Prefs) {
+        super.init(scratchpad: scratchpad, delegate: delegate, basePrefs: basePrefs, collection: "tabs")
     }
 
     public func synchronizeLocalTabs(localTabs: RemoteClientsAndTabs, withServer storageClient: Sync15StorageClient, info: InfoCollections) -> Success {
