@@ -167,14 +167,20 @@ public class BrowserProfile: Profile {
         return SQLiteRemoteClientsAndTabs(files: self.files)
     }()
 
-    private class func syncClientsToStorage(storage: RemoteClientsAndTabs, prefs: Prefs, ready: Ready) -> Deferred<Result<Ready>> {
-        let clientSynchronizer = ready.synchronizer(ClientsSynchronizer.self, prefs: prefs)
+    private class func syncClientsToStorage(storage: RemoteClientsAndTabs, delegate: SyncDelegate, prefs: Prefs, ready: Ready) -> Deferred<Result<Ready>> {
+        let clientSynchronizer = ready.synchronizer(ClientsSynchronizer.self, delegate: delegate, prefs: prefs)
         let success = clientSynchronizer.synchronizeLocalClients(storage, withServer: ready.client, info: ready.info)
         return success >>== always(ready)
     }
 
+    private class func syncTabsToStorage(storage: RemoteClientsAndTabs, delegate: SyncDelegate, prefs: Prefs, ready: Ready) -> Deferred<Result<RemoteClientsAndTabs>> {
+        let tabSynchronizer = ready.synchronizer(TabsSynchronizer.self, delegate: delegate, prefs: prefs)
+        let success = tabSynchronizer.synchronizeLocalTabs(storage, withServer: ready.client, info: ready.info)
+        return success >>== always(storage)
+    }
+
     public func getClients() -> Deferred<Result<[RemoteClient]>> {
-        if let account = self.account {
+        if let account = self.account, app = self.app {
             // TODO: get from the account itself.
             let url = ProductionSync15Configuration().tokenServerEndpointURL
             let authState = account.syncAuthState(url)
@@ -184,7 +190,8 @@ public class BrowserProfile: Profile {
 
             let ready = SyncStateMachine.toReady(authState, prefs: syncPrefs)
 
-            let syncClients = curry(BrowserProfile.syncClientsToStorage)(storage, syncPrefs)
+            let delegate = BrowserProfileSyncDelegate(app: app)
+            let syncClients = curry(BrowserProfile.syncClientsToStorage)(storage, delegate, syncPrefs)
 
             return ready
               >>== syncClients
@@ -195,14 +202,7 @@ public class BrowserProfile: Profile {
     }
 
     public func getClientsAndTabs() -> Deferred<Result<[ClientAndTabs]>> {
-
-        func syncTabsToStorage(storage: RemoteClientsAndTabs, prefs: Prefs, ready: Ready) -> Deferred<Result<RemoteClientsAndTabs>> {
-            let tabSynchronizer = ready.synchronizer(TabsSynchronizer.self, prefs: prefs)
-            let success = tabSynchronizer.synchronizeLocalTabs(storage, withServer: ready.client, info: ready.info)
-            return success >>== always(storage)
-        }
-
-        if let account = self.account {
+        if let account = self.account, app = self.app {
             // TODO: get from the account itself.
             let url = ProductionSync15Configuration().tokenServerEndpointURL
             let authState = account.syncAuthState(url)
@@ -212,8 +212,9 @@ public class BrowserProfile: Profile {
 
             let ready = SyncStateMachine.toReady(authState, prefs: syncPrefs)
 
-            let syncClients = curry(BrowserProfile.syncClientsToStorage)(storage, syncPrefs)
-            let syncTabs = curry(syncTabsToStorage)(storage, syncPrefs)
+            let delegate = BrowserProfileSyncDelegate(app: app)
+            let syncClients = curry(BrowserProfile.syncClientsToStorage)(storage, delegate, syncPrefs)
+            let syncTabs = curry(BrowserProfile.syncTabsToStorage)(storage, delegate, syncPrefs)
 
             return ready
               >>== syncClients
