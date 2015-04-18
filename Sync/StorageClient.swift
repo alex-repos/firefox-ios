@@ -255,7 +255,7 @@ public class Sync15StorageClient {
         self.authorizer = {
             (r: NSMutableURLRequest) -> NSMutableURLRequest in
             let helper = HawkHelper(id: token.id, key: token.key.dataUsingEncoding(NSUTF8StringEncoding, allowLossyConversion: false)!)
-            r.addValue(helper.getAuthorizationValueFor(r), forHTTPHeaderField: "Authorization")
+            r.setValue(helper.getAuthorizationValueFor(r), forHTTPHeaderField: "Authorization")
             return r
         }
     }
@@ -270,7 +270,7 @@ public class Sync15StorageClient {
     func requestGET(url: NSURL) -> Request {
         let req = NSMutableURLRequest(URL: url)
         req.HTTPMethod = Method.GET.rawValue
-        req.addValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         let authorized: NSMutableURLRequest = self.authorizer(req)
         return Alamofire.request(authorized)
                         .validate(contentType: ["application/json"])
@@ -279,7 +279,7 @@ public class Sync15StorageClient {
     func requestDELETE(url: NSURL) -> Request {
         let req = NSMutableURLRequest(URL: url)
         req.HTTPMethod = Method.DELETE.rawValue
-        req.addValue("1", forHTTPHeaderField: "X-Confirm-Delete")
+        req.setValue("1", forHTTPHeaderField: "X-Confirm-Delete")
         let authorized: NSMutableURLRequest = self.authorizer(req)
         return Alamofire.request(authorized)
     }
