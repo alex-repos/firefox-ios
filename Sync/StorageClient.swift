@@ -284,6 +284,22 @@ public class Sync15StorageClient {
         return Alamofire.request(authorized)
     }
 
+    func requestPUT(url: NSURL, body: JSON, ifUnmodifiedSince: Timestamp?) -> Request {
+        let req = NSMutableURLRequest(URL: url)
+        req.HTTPMethod = Method.PUT.rawValue
+        req.addValue("application/json", forHTTPHeaderField: "Accept")
+        let authorized: NSMutableURLRequest = self.authorizer(req)
+
+        if let ifUnmodifiedSince = ifUnmodifiedSince {
+            req.addValue(millisecondsToDecimalSeconds(ifUnmodifiedSince), forHTTPHeaderField: "X-If-Unmodified-Since")
+        }
+
+        req.HTTPBody = body.toString().dataUsingEncoding(NSUTF8StringEncoding)!
+
+        return Alamofire.request(authorized)
+                        .validate(contentType: ["application/json"])
+    }
+
     private func doOp<T>(op: (NSURL) -> Request, path: String, f: (JSON) -> T?) -> Deferred<Result<StorageResponse<T>>> {
         let deferred = Deferred<Result<StorageResponse<T>>>(defaultQueue: self.resultQueue)
         let req = op(self.serverURI.URLByAppendingPathComponent(path))
@@ -305,23 +321,8 @@ public class Sync15StorageClient {
     }
 
     private func putResource<T>(path: String, body: JSON, ifUnmodifiedSince: Timestamp?, f: (JSON) -> T?) -> Deferred<Result<StorageResponse<T>>> {
-        func requestPUT(url: NSURL) -> Request {
-            let req = NSMutableURLRequest(URL: url)
-            req.HTTPMethod = Method.PUT.rawValue
-            req.addValue("application/json", forHTTPHeaderField: "Accept")
-            let authorized: NSMutableURLRequest = self.authorizer(req)
-
-            if let ifUnmodifiedSince = ifUnmodifiedSince {
-                req.addValue(millisecondsToDecimalSeconds(ifUnmodifiedSince), forHTTPHeaderField: "X-If-Unmodified-Since")
-            }
-
-            req.HTTPBody = body.toString().dataUsingEncoding(NSUTF8StringEncoding)!
-
-            return Alamofire.request(authorized)
-            .validate(contentType: ["application/json"])
-        }
-
-        return doOp(requestPUT, path: path, f: f)
+        let put = { self.requestPUT($0, body: body, ifUnmodifiedSince: ifUnmodifiedSince) }
+        return doOp(put, path: path, f: f)
     }
 
     private func getResource<T>(path: String, f: (JSON) -> T?) -> Deferred<Result<StorageResponse<T>>> {
@@ -382,6 +383,24 @@ public class Sync15CollectionClient<T: CleartextPayloadJSON> {
 
     private func uriForRecord(guid: String) -> NSURL {
         return self.collectionURI.URLByAppendingPathComponent(guid)
+    }
+
+    public func put(record: Record<T>, ifUnmodifiedSince: Timestamp?) -> Deferred<Result<StorageResponse<JSON>>> {
+        let deferred = Deferred<Result<StorageResponse<JSON>>>(defaultQueue: client.resultQueue)
+
+        let body: JSON = JSON([])         // TODO
+        let req = client.requestPUT(uriForRecord(record.id), body: body, ifUnmodifiedSince: ifUnmodifiedSince)
+        req.responseParsedJSON(errorWrap(deferred, { (_, response, data, error) in
+            if let json: JSON = data as? JSON {
+                let storageResponse = StorageResponse(value: json, response: response!)
+                deferred.fill(Result(success: storageResponse))
+                return
+            }
+            println("Couldn't cast JSON.")
+            deferred.fill(Result(failure: RecordParseError()))
+        }))
+
+        return deferred
     }
 
     public func get(guid: String) -> Deferred<Result<StorageResponse<Record<T>>>> {
