@@ -164,12 +164,18 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         super.init(scratchpad: scratchpad, delegate: delegate, basePrefs: basePrefs, collection: "clients")
     }
 
-    private func getOurClientRecord() -> Record<ClientPayload> {
+    public func getOurClientRecord() -> Record<ClientPayload> {
         let json = JSON([
+            "version": "0.1",    // TODO
+            "protocols": ["1.5"],
             "name": self.scratchpad.clientName,
             "os": "iOS",
             "commands": [JSON](),
             "type": "mobile",
+            "appPackage": "org.mozilla.fennec",   // TODO
+            "application": "Fennec",              // TODO
+            "device": DeviceInfo.deviceModel(),
+            "formfactor": DeviceInfo.isSimulator() ? "simulator" : "phone",
         ])
 
         let payload = ClientPayload(json)
