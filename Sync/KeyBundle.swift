@@ -147,7 +147,7 @@ public class KeyBundle: Equatable {
      *
      * For this reason, be careful trying to simplify or improve this code.
      */
-    public func factory<T : CleartextPayloadJSON>(f: (JSON) -> T) -> (String) -> T? {
+    public func factory<T: CleartextPayloadJSON>(f: JSON -> T) -> String -> T? {
         return { (payload: String) -> T? in
             let potential = EncryptedJSON(json: payload, keyBundle: self)
             if !(potential.isValid()) {
@@ -159,6 +159,25 @@ public class KeyBundle: Equatable {
                 return nil
             }
             return f(cleartext!)
+        }
+    }
+
+    public func serializer<T: CleartextPayloadJSON>(f: T -> JSON) -> T -> JSON? {
+        return { (payload: T) -> EncryptedJSON? in
+            let json = f(payload)
+            if let data = json.toString(pretty: false).dataUsingEncoding(NSUTF8StringEncoding, allowLossyConversion: false),
+               let (ciphertext, iv) = self.encrypt(data, iv: nil) {
+
+                // So we have the encrypted payload. Now let's build the envelope around it.
+                let ciphertext = ciphertext.base64EncodedString
+                let iv = iv.base64EncodedString
+                let envelope = JSON([
+                    "modified": 0,
+                    "ttl": 0,
+                    "id": payload.
+                    ])
+            }
+            return nil
         }
     }
 
