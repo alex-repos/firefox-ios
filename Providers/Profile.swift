@@ -28,6 +28,38 @@ class ProfileFileAccessor: FileAccessor {
     }
 }
 
+class BrowserProfileSyncDelegate: SyncDelegate {
+    let app: UIApplication
+
+    init(app: UIApplication) {
+        self.app = app
+    }
+
+    // SyncDelegate
+    func displaySentTabForURL(URL: NSURL, title: String) {
+        // TODO: localize.
+        let notification = UILocalNotification()
+
+        /* actions
+        notification.identifier = "tab-" + Bytes.generateGUID()
+        notification.activationMode = UIUserNotificationActivationMode.Foreground
+        notification.destructive = false
+        notification.authenticationRequired = true
+        */
+
+        notification.alertTitle = "New tab: \(title)"
+        notification.alertBody = URL.absoluteString!
+        notification.alertAction = nil
+
+        // TODO: categories
+        // TODO: put the URL into the alert userInfo.
+        // TODO: application:didFinishLaunchingWithOptions:
+        // TODO:
+        // TODO: set additionalActions to bookmark or add to reading list.
+        self.app.presentLocalNotificationNow(notification)
+    }
+}
+
 /**
  * A Profile manages access to the user's data.
  */
