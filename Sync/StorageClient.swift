@@ -287,15 +287,15 @@ public class Sync15StorageClient {
     func requestPUT(url: NSURL, body: JSON, ifUnmodifiedSince: Timestamp?) -> Request {
         let req = NSMutableURLRequest(URL: url)
         req.HTTPMethod = Method.PUT.rawValue
-        req.addValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
         let authorized: NSMutableURLRequest = self.authorizer(req)
 
         if let ifUnmodifiedSince = ifUnmodifiedSince {
-            req.addValue(millisecondsToDecimalSeconds(ifUnmodifiedSince), forHTTPHeaderField: "X-If-Unmodified-Since")
+            req.setValue(millisecondsToDecimalSeconds(ifUnmodifiedSince), forHTTPHeaderField: "X-If-Unmodified-Since")
         }
 
         req.HTTPBody = body.toString().dataUsingEncoding(NSUTF8StringEncoding)!
-
         return Alamofire.request(authorized)
                         .validate(contentType: ["application/json"])
     }
