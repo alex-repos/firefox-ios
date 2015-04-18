@@ -64,8 +64,8 @@ public class FatalError: SyncError {
 
 // TODO
 public protocol Command {
-    init?(command: String, args: [JSON])
-    func run() -> Success
+    static func fromName(command: String, args: [JSON]) -> Command?
+    func run(synchronizer: ClientsSynchronizer) -> Success
 }
 
 // Shit.
@@ -73,11 +73,15 @@ public protocol Command {
 // We need a way to log out the account.
 // So when we sync commands, we're gonna need a delegate of some kind.
 public class WipeCommand: Command {
-    public required init?(command: String, args: [JSON]) {
+    public init?(command: String, args: [JSON]) {
         return nil
     }
 
-    public func run() -> Success {
+    public class func fromName(command: String, args: [JSON]) -> Command? {
+        return WipeCommand(command: command, args: args)
+    }
+
+    public func run(synchronizer: ClientsSynchronizer) -> Success {
         return succeed()
     }
 }
@@ -87,7 +91,7 @@ public class DisplayURICommand: Command {
     // clientID: we don't care.
     let title: String
 
-    public required init?(command: String, args: [JSON]) {
+    public init?(command: String, args: [JSON]) {
         if let uri = args[0].asString?.asURL,
                title = args[2].asString {
             self.uri = uri
@@ -100,30 +104,23 @@ public class DisplayURICommand: Command {
         }
     }
 
-    public func run() -> Success {
-        // TODO: localize.
-        let app = UIApplication.sharedApplication()
-        let notification = UILocalNotification()
-        notification.alertTitle = "New tab: \(title)"
-        notification.alertBody = uri.absoluteString!
-        notification.alertAction = nil
+    public class func fromName(command: String, args: [JSON]) -> Command? {
+        return DisplayURICommand(command: command, args: args)
+    }
 
-        // TODO: put the URL into the alert userInfo.
-        // TODO: application:didFinishLaunchingWithOptions:
-        // TODO:
-        // TODO: set additionalActions to bookmark or add to reading list.
-        app.presentLocalNotificationNow(notification)
+    public func run(synchronizer: ClientsSynchronizer) -> Success {
+        synchronizer.delegate.displaySentTabForURL(uri, title: title)
         return succeed()
     }
 }
 
-let Commands = [
-    "wipeAll": WipeCommand.self,
-    "wipeEngine": WipeCommand.self,
+let Commands: [String: (String, [JSON]) -> Command?] = [
+    "wipeAll": WipeCommand.fromName,
+    "wipeEngine": WipeCommand.fromName,
     // resetEngine
     // resetAll
     // logout
-    "displayURI": DisplayURICommand.self,
+    "displayURI": DisplayURICommand.fromName,
 ]
 
 public protocol SingleCollectionSynchronizer {
@@ -166,6 +163,18 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
     public required init(scratchpad: Scratchpad, delegate: SyncDelegate, basePrefs: Prefs) {
         super.init(scratchpad: scratchpad, delegate: delegate, basePrefs: basePrefs, collection: "clients")
     }
+
+    private func getOurClientRecord() -> Record<ClientPayload> {
+        let json = JSON([
+            "name": self.scratchpad.clientName,
+            "os": "iOS",
+            "commands": [JSON](),
+            "type": "mobile",
+        ])
+
+        let payload = ClientPayload(json)
+        return Record(id: self.scratchpad.clientGUID,
+            payload: payload, modified: 0, sortindex: 0, ttl: 0)
     }
 
     private func clientRecordToLocalClientEntry(record: Record<ClientPayload>) -> RemoteClient {
@@ -184,38 +193,43 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
         return succeed()
     }
 
-    private func processCommands(commands: [JSON]) -> Success {
-        if commands.isEmpty {
-            return succeed()
-        }
-
-        func parse(json: JSON) -> Command? {
-            if let name = json["command"].asString,
-                   args = json["args"].asArray,
-                   constructor = Commands[name] {
-                return constructor(command: name, args: args)
-            }
-            return nil
-        }
-
-        let commands = optFilter(commands.map(parse))
-
-        // TODO: run commands.
-        commands
-        return succeed()
-    }
-
-    private func processCommandsFromRecord(record: Record<ClientPayload>?, withServer storageClient: Sync15StorageClient) -> Success {
+    /**
+     * Returns whether any commands were found (and thus a replacement record
+     * needs to be uploaded). Also returns the commands: we run them after we
+     * upload a replacement record.
+     */
+    private func processCommandsFromRecord(record: Record<ClientPayload>?, withServer storageClient: Sync15CollectionClient<ClientPayload>) -> Deferred<Result<(Bool, [Command])>> {
         // TODO: process commands.
-        // TODO: upload a replacement record if we need to override commands.
         // TODO: short-circuit based on the modified time of the record we uploaded, so we don't need to skip ahead.
         if let record = record {
-            return processCommands(record.payload.commands)
+            let commands = record.payload.commands
+            if !commands.isEmpty {
+                func parse(json: JSON) -> Command? {
+                    if let name = json["command"].asString,
+                        args = json["args"].asArray,
+                        constructor = Commands[name] {
+                            return constructor(name, args)
+                    }
+                    return nil
+                }
+
+                // TODO: can we do anything better if a command fails?
+                return deferResult((true, optFilter(commands.map(parse))))
+            }
+        }
+
+        return deferResult((false, []))
+    }
+
+    private func maybeUploadOurRecord(should: Bool, ifUnmodifiedSince: Timestamp?, toServer storageClient: Sync15CollectionClient<ClientPayload>) -> Success {
+        if let ifUnmodifiedSince = ifUnmodifiedSince where should {
+            return storageClient.put(getOurClientRecord(), ifUnmodifiedSince: ifUnmodifiedSince)
+               >>> { succeed() }
         }
         return succeed()
     }
 
-    private func applyStorageResponse(response: StorageResponse<[Record<ClientPayload>]>, toLocalClients localClients: RemoteClientsAndTabs, withServer storageClient: Sync15StorageClient) -> Success {
+    private func applyStorageResponse(response: StorageResponse<[Record<ClientPayload>]>, toLocalClients localClients: RemoteClientsAndTabs, withServer storageClient: Sync15CollectionClient<ClientPayload>) -> Success {
         // TODO: decide whether to upload ours.
 
         let records = response.value
@@ -240,9 +254,21 @@ public class ClientsSynchronizer: BaseSingleCollectionSynchronizer, Synchronizer
             }
         }
 
+        // Apply remote changes.
+        // Collect commands from our own record and reupload if necessary.
+        // Then run the commands and return.
         return localClients.insertOrUpdateClients(toInsert)
           >>== { self.processCommandsFromRecord(ours, withServer: storageClient) }
-          >>== updateMetadata
+          >>== { (shouldUpload, commands) in
+
+            return self.maybeUploadOurRecord(shouldUpload, ifUnmodifiedSince: ours?.modified, toServer: storageClient)
+               >>> {
+                for (command) in commands {
+                    command.run(self)
+                }
+                return succeed()
+            }
+        }
     }
 
     // TODO: return whether or not the sync should continue.
