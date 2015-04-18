@@ -17,6 +17,15 @@ private func succeed() -> Success {
     return deferResult(())
 }
 
+/**
+ * This exists to pass in external context: e.g., the UIApplication can
+ * expose notification functionality in this way.
+ */
+public protocol SyncDelegate {
+    func displaySentTabForURL(URL: NSURL, title: String)
+    // TODO: storage.
+}
+
 // TODO: return values?
 /**
  * A Synchronizer is (unavoidably) entirely in charge of what it does within a sync.
